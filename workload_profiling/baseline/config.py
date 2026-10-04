@@ -50,6 +50,7 @@ class BaselineConfig:
     window_ms: int = 60000
     strategy: str = "min_rpm"
     endpoints: tuple[EndpointConfig, ...] = field(default_factory=tuple)
+    batch_order: str = "fifo"
 
     def __post_init__(self):
         for name in ("arrival_interval_ms", "batch_size", "window_ms"):
@@ -61,6 +62,8 @@ class BaselineConfig:
             finite_number(getattr(self, name), name, allow_zero=True)
         if not isinstance(self.strategy, str) or not self.strategy:
             raise ValueError("strategy must be min_rpm or module:attribute")
+        if not isinstance(self.batch_order, str) or not self.batch_order.strip():
+            raise ValueError("batch_order must be fifo, shortest_first, longest_first or module:attribute")
         object.__setattr__(self, "endpoints", tuple(self.endpoints))
         if not self.endpoints or any(not isinstance(e, EndpointConfig) for e in self.endpoints):
             raise ValueError("At least one valid endpoint is required")

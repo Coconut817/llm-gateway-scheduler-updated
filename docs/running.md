@@ -51,6 +51,12 @@ prompt 计数首次会下载固定 Qwen tokenizer/config/template，后续校验
 # 自定义策略
 & .\.venv\Scripts\python.exe baseline.py --source examples/length_requests.jsonl --source-format lengths --strategy examples.min_tpm:MinTpmStrategy --output-dir workload_profiling/results/baseline_custom
 
+# 内置批内排序：总 tokens 最短优先
+& .\.venv\Scripts\python.exe baseline.py --limit 200 --batch-order shortest_first --output-dir workload_profiling/results/baseline_custom/shortest_first
+
+# 自定义批内排序与路由同时启用
+& .\.venv\Scripts\python.exe baseline.py --source examples/length_requests.jsonl --source-format lengths --batch-size 2 --batch-wait-ms 3 --batch-order examples.output_first:OutputLongestFirstOrder --strategy examples.min_tpm:MinTpmStrategy --output-dir workload_profiling/results/baseline_custom/output_first
+
 # 完全等价的模块入口与帮助
 & .\.venv\Scripts\python.exe -m workload_profiling.baseline.run --limit 200
 & .\.venv\Scripts\python.exe baseline.py --help
@@ -73,6 +79,7 @@ CLI 覆盖优先于配置文件；未提供的参数沿用配置。覆盖只影�
 | `--input-threshold X` | 配置中的 40342.5 | 有限非负数，tokens，包含等号 |
 | `--output-threshold X` | 配置中的 578 | 有限非负数，tokens，包含等号 |
 | `--strategy SPEC` | 配置中的 `min_rpm` | 内置策略或 `module:attribute` |
+| `--batch-order SPEC` | 配置中的 `fifo` | fifo/shortest_first/longest_first 或 `module:attribute`；控制批内派发顺序 |
 | `-h`、`--help` | — | 帮助后退出 |
 
 退出码 0 表示成功且没有拒绝；拒绝请求或 argparse/输入配置错误为 2。其他未被捕获的运行异常可能为 1。出现拒绝时仍会导出该次完整结果；输入或配置失败时不应将目录中的旧结果当作本次成功产物。
@@ -91,6 +98,7 @@ CLI 覆盖优先于配置文件；未提供的参数沿用配置。覆盖只影�
 | `input_threshold_tokens`、`output_threshold_tokens` | 有限非负数，单位 tokens |
 | `window_ms` | 固定 60000，RPM/TPM 分钟窗口，不支持任意窗口 |
 | `strategy` | `min_rpm` 或可导入 `module:attribute` |
+| `batch_order` | 默认 fifo；支持 shortest_first、longest_first 或可导入 `module:attribute`，旧配置可省略 |
 | `endpoints` | 至少一个端点对象，ID 唯一 |
 
 端点字段：
@@ -114,9 +122,9 @@ CLI 覆盖优先于配置文件；未提供的参数沿用配置。覆盖只影�
 & .\.venv\Scripts\python.exe demo.py --port 8766 --open
 ```
 
-默认本地地址 `http://127.0.0.1:8765`。修改到达间隔、批大小、收集等待、两轴阈值和端点 JSON，点击运行；后台回放期间轮询状态，完成后显示端点、请求分页和 CSV 下载。
+默认本地地址 `http://127.0.0.1:8765`。修改到达间隔、批大小、收集等待、两轴阈值和端点 JSON，并选择批内排序，点击运行；后台回放期间轮询状态，完成后显示端点、请求分页（含 0-based 批内位置）和 CSV 下载。
 
-网页数量默认 200，填 0 转换成 API 的 `limit:null`，代表全部；API 直接传 `limit:0` 无效。网页只支持内置 `min_rpm`，自定义策略用 CLI/Python。网页固定读取默认原始数据，不提供文件上传或 `--source`；自定义文件请用 CLI/Python。
+网页数量默认 200，填 0 转换成 API 的 `limit:null`，代表全部；API 直接传 `limit:0` 无效。网页路由支持内置 `min_rpm`，批内排序支持 fifo/shortest_first/longest_first；自定义 Python 排序与路由用 CLI/Python。网页固定读取默认原始数据，不提供文件上传或 `--source`；自定义文件请用 CLI/Python。
 
 `Ctrl+C` 停止服务；后台回放线程随进程结束，不保证中途关闭时导出结果。HTTP 接口完整说明见 [HTTP API](http-api.md)。
 
@@ -171,9 +179,10 @@ CLI 覆盖优先于配置文件；未提供的参数沿用配置。覆盖只影�
 ```powershell
 & .\.venv\Scripts\python.exe -m unittest discover -s workload_profiling/tests -t .
 & .\.venv\Scripts\python.exe -m unittest workload_profiling.tests.test_baseline -v
+& .\.venv\Scripts\python.exe -m unittest workload_profiling.tests.test_baseline_ordering -v
 ```
 
-集成测试检查已有本地 tokenizer、smoke 和历史标签；缺少相关产物时会有明确 skip，不代表核心 baseline 失败。当前包含全部历史产物的本地环境为 90 个测试通过；首次下载的环境可能跳过部分集成检查。
+集成测试检查已有本地 tokenizer、smoke 和历史标签；缺少相关产物时会有明确 skip，不代表核心 baseline 失败。test_baseline_ordering 验证批内排序、路由组合、容量限制、非法排列、跨批顺序和导出记录；首次下载的环境可能跳过部分真实产物集成检查。
 
 ## 常见问题
 
@@ -185,10 +194,12 @@ CLI 覆盖优先于配置文件；未提供的参数沿用配置。覆盖只影�
 | tokenizer 校验和不匹配 | 本地文件与锁文件不一致，不要通过改哈希假装一致；重新获取同一固定版本的完整缓存 |
 | 序列长于 tokenizer 最大长度提示 | 本项目只计数、不执行模型、不截断；真实模型服务要另行检查上下文限制 |
 | Heavy 等待超过 batch_wait_ms | 该参数只约束收集阶段；查看 `capacity_wait_ms` 与容量配置 |
+| 更换排序后 CSV 行顺序没变 | CSV 保持输入顺序；查看 batch_position、batches.json 的 dispatch_order 或事件派发顺序 |
+| 排序变了，但平均延迟没变 | 容量充足时同批可能同刻派发，整体延迟统计可相同；先核对实际派发顺序，容量紧张时顺序才可能影响排队 |
+| 自定义排序报 every batch request_id exactly once | 必须返回完整 ID 排列，不能遗漏、重复或加入其他批的请求 |
 | 最终并发为 0，RPM/TPM 仍大于 0 | 请求已完成，但最近 60 秒调度计数尚未过期 |
 | 请求被拒绝 | 总 tokens 超过所有端点 TPM 上限；提高容量或换数据，结果内保留原因 |
 | 所有批都是 timeout | 当前到达频率与重型比例不足以在期限内凑满批；调小 batch_size 或延长等待 |
 | 端口被占用 | 指定 `--port 8766` 等其他可用端口 |
 | CSV 写入失败 | 关闭占用目标文件的程序，或更换输出目录 |
 | 历史标签 SHA-256 不匹配 | 基表或标签发生变化，按 Stage 1 → 2 → 2.1 重建依赖，见 [历史复现](offline-profiling.md) |
-

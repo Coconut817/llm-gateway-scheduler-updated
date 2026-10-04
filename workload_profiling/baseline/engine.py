@@ -2,9 +2,11 @@
 from collections import Counter, deque
 from dataclasses import asdict, dataclass
 import heapq
+import inspect
 import math
 
 from .models import EndpointState, WorkloadRequest
+from .ordering import load_batch_order, validate_batch_order
 from .routing import load_strategy
 
 
@@ -18,11 +20,16 @@ class RunResult:
 
 
 class BaselineRunner:
-    def __init__(self, config, *, strategy=None):
+    def __init__(self, config, *, strategy=None, batch_order=None):
         self.config = config
         self.strategy = strategy if strategy is not None else load_strategy(config.strategy)
         if not callable(getattr(self.strategy, "select", None)):
             raise TypeError("strategy must implement select")
+        self.batch_order = batch_order if batch_order is not None else load_batch_order(config.batch_order)
+        if not callable(getattr(self.batch_order, "order_batch", None)):
+            raise TypeError("batch_order must implement order_batch")
+        if inspect.iscoroutinefunction(self.strategy.select) or inspect.iscoroutinefunction(self.batch_order.order_batch):
+            raise TypeError("Routing and batch ordering must be synchronous")
         self._used = False
 
     def run(self, requests):
@@ -46,13 +53,19 @@ class BaselineRunner:
                 return
             batch_id = len(batches)
             members = list(pending)
+            requests = tuple(request for request, _ in members)
+            views = tuple(endpoint.view(now, config.window_ms) for endpoint in endpoints)
+            ordered_ids = validate_batch_order(requests, self.batch_order.order_batch(requests, views, now))
+            members_by_id = {request.request_id: (request, row) for request, row in members}
             pending.clear()
             batch = {"batch_id": batch_id, "trigger": reason, "released_at_ms": now,
-                     "size": len(members), "request_ids": [r[0].request_id for r in members]}
+                     "size": len(members), "request_ids": [r[0].request_id for r in members],
+                     "dispatch_order": list(ordered_ids)}
             batches.append(batch)
             event("batch_released", **batch)
-            for request, row in members:
-                row.update(batch_id=batch_id, batch_trigger=reason, batch_released_at_ms=now,
+            for position, request_id in enumerate(ordered_ids):
+                request, row = members_by_id[request_id]
+                row.update(batch_id=batch_id, batch_position=position, batch_trigger=reason, batch_released_at_ms=now,
                            batch_wait_ms=now - row["arrival_at_ms"])
                 ready.append((request, row))
 
@@ -99,7 +112,7 @@ class BaselineRunner:
                     row = {**asdict(request), "total_tokens": request.total_tokens,
                            "arrival_at_ms": now, "input_heavy": input_heavy,
                            "output_heavy": output_heavy, "heavy": heavy,
-                           "batch_id": None, "batch_trigger": None, "batch_released_at_ms": None,
+                           "batch_id": None, "batch_position": None, "batch_trigger": None, "batch_released_at_ms": None,
                            "batch_wait_ms": 0, "capacity_wait_ms": 0, "queue_wait_ms": 0,
                            "endpoint_id": None, "dispatch_at_ms": None, "finished_at_ms": None,
                            "service_ms": 0, "latency_ms": 0, "status": "queued", "rejection_reason": None,
@@ -150,7 +163,7 @@ class BaselineRunner:
                 sequence += 1
                 heapq.heappush(running, (finished, sequence, selected, row))
                 event("dispatched", request_id=request.request_id, endpoint_id=selected,
-                      batch_id=row["batch_id"], finished_at_ms=finished,
+                      batch_id=row["batch_id"], batch_position=row["batch_position"], finished_at_ms=finished,
                       endpoint_state_after=asdict(endpoint.view(now, config.window_ms)))
 
         states = []
@@ -174,6 +187,8 @@ class BaselineRunner:
 
         summary = {"clock": "virtual_ms", "output_length_mode": "oracle_recorded_response",
                    "strategy": config.strategy, "strategy_class": type(self.strategy).__module__ + "." + type(self.strategy).__qualname__,
+                   "batch_order": config.batch_order,
+                   "batch_order_class": type(self.batch_order).__module__ + "." + type(self.batch_order).__qualname__,
                    "total_requests": len(rows), "light_requests": len(rows)-len(heavy_rows),
                    "heavy_requests": len(heavy_rows), "input_heavy_requests": sum(r["input_heavy"] for r in rows),
                    "output_heavy_requests": sum(r["output_heavy"] for r in rows),

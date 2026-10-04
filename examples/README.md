@@ -9,6 +9,7 @@
 | `current_requests.jsonl` | 2 条当前请求，供单条运行时接口读取，未附 response | 是 |
 | `run_baseline.py` | 调用 `execute()`，运行长度示例并导出结果 | 否 |
 | `min_tpm.py` | 可替换策略，比较候选端点 TPM 利用率 | 否 |
+| `output_first.py` | 可替换批内排序，按录制输出长度降序排列请求 | 否 |
 | `sender.py` | 同步 sender 契约示例，返回演示回复，不调用模型 | 是，计数接口需要 |
 
 ## 1. 先运行不依赖 tokenizer 的示例
@@ -39,9 +40,19 @@
 & .\.venv\Scripts\python.exe baseline.py --source examples/length_requests.jsonl --source-format lengths --strategy examples.min_tpm:MinTpmStrategy --batch-size 2 --batch-wait-ms 3 --output-dir workload_profiling/results/baseline_custom
 ```
 
-此示例修改排序指标；候选端点仍必须满足 RPM、TPM、并发限制。接入契约见 [扩展说明](../docs/extensions.md)。
+此示例修改端点评分指标，批内仍按 FIFO；候选端点必须满足 RPM、TPM、并发限制。接入契约见 [扩展说明](../docs/extensions.md)。
 
-## 4. 单条接口接入 sender
+## 4. 同时替换批内排序与路由
+
+```powershell
+& .\.venv\Scripts\python.exe baseline.py --source examples/length_requests.jsonl --source-format lengths --batch-size 2 --batch-wait-ms 3 --batch-order examples.output_first:OutputLongestFirstOrder --strategy examples.min_tpm:MinTpmStrategy --output-dir workload_profiling/results/baseline_custom/output_first
+```
+
+仍为 9 条请求，轻型 5、重型 4，全部完成。第一批 request_ids 为 `["input_heavy_1", "output_heavy_2"]`，dispatch_order 为 `["output_heavy_2", "input_heavy_1"]`。排序改变实际派发顺序，CSV 仍保留到达顺序，batch_position 分别为 1、0。
+
+内置最短优先用 `--batch-order shortest_first`，最长优先用 longest_first，默认 fifo。内置长短按 input+output 总 tokens 计算，自定义示例按 output_tokens 计算；它们是不同排序规则。详见 [两个接口的接入方法](../docs/extensions.md#排序与路由是两个独立接口)。
+
+## 5. 单条接口接入 sender
 
 ```powershell
 & .\.venv\Scripts\python.exe -m workload_profiling.runtime.run_stream --input examples/current_requests.jsonl --lengths-only --sender examples.sender:send_one

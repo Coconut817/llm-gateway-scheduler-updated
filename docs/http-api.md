@@ -19,7 +19,7 @@
 
 ## GET config
 
-返回 [baseline.json](../workload_profiling/config/baseline.json) 的完整配置：批参数、两轴阈值、strategy 和 endpoints。GET 返回的是磁盘默认值，不是运行中的覆盖配置；实际生效配置保存在本轮 `config.json`。
+返回 [baseline.json](../workload_profiling/config/baseline.json) 的完整配置：批参数、两轴阈值、batch_order、strategy 和 endpoints。GET 返回的是磁盘默认值，不是运行中的覆盖配置；实际生效配置保存在本轮 `config.json`。
 
 推荐先读取默认值，在客户端修改必要字段，再把完整字典传给 POST。
 
@@ -43,10 +43,12 @@
 
 | 字段 | 契约 |
 | --- | --- |
-| `config` | 可选合法 BaselineConfig 字典；网页 API 只接受 strategy=`min_rpm` |
+| `config` | 可选合法 BaselineConfig 字典；strategy 只接受 min_rpm，batch_order 只接受 fifo/shortest_first/longest_first |
 | `limit` | 可省略/为 null 表示全部，或正整数；0、负数、bool 无效 |
 
 网页控件的“数量 0”会由 JavaScript 转成 null，直接调用 API 不要传 0。该 API 固定读取默认原始 prompt 文件，不接受 source/source_format/output 路径，自己的数据使用 CLI 或 execute。
+
+选择批内顺序时从 GET config 的完整字典设置 `config["batch_order"]="shortest_first"` 后提交。旧配置缺少此字段时采用 fifo。自定义 module:attribute 排序与路由使用 CLI/Python，HTTP 不加载外部插件。
 
 提交成功立即返回 202：
 
@@ -105,7 +107,7 @@ completed 表示回放已排空并导出，仍可能有 rejected 请求，检查
 | `offset` | 0 | 非负整数，请求列表的行偏移 |
 | `limit` | 100 | 1 到 200 的整数 |
 
-使用附带原始数据运行前 200 行时，返回示例：
+使用附带原始数据、默认 FIFO + min_rpm 运行前 200 行时，返回示例：
 
 ```json
 {"count":200,"requests":[{"request_id":"request_000000","input_tokens":615,"output_tokens":1261,"source_line":0,"total_tokens":1876,"arrival_at_ms":0,"heavy":true,"endpoint_id":"endpoint_a","status":"completed"}]}
@@ -135,6 +137,7 @@ def get_json(path):
 config = get_json("/api/baseline/config")
 config["batch_size"] = 4
 config["batch_wait_ms"] = 10
+config["batch_order"] = "shortest_first"
 body = json.dumps({"config": config, "limit": 200}).encode("utf-8")
 with urlopen(Request(base + "/api/baseline/run", data=body,
                      headers={"Content-Type": "application/json"}), timeout=30) as response:

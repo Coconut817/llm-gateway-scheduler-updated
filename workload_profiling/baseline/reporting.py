@@ -37,9 +37,10 @@ def write_outputs(result, config, directory, *, provenance=None):
              "离线事件驱动回放；时钟单位为虚拟毫秒。输出长度来自已记录回答（oracle），端点与服务时间为模拟参数。", "",
              f"逐条到达间隔：{config.arrival_interval_ms} ms；重型批大小：{config.batch_size}；最老请求等待上限：{config.batch_wait_ms} ms。",
              f"Heavy = input_tokens >= {config.input_threshold_tokens} OR output_tokens >= {config.output_threshold_tokens}。",
+             f"批内排序：`{s['batch_order']}`（`{s['batch_order_class']}`）；路由实现：`{s['strategy_class']}`。",
              f"路由策略：`{s['strategy']}`；RPM/TPM 使用 (t-60000,t] 滚动窗口。TPM 在调度时预留 input+output 全量 token。", "",
-             "轻型请求在到达时立即完成，不占用端点。重型批释放后逐条分配，更新状态再选择下一端点。",
-             "容量不足时进入 FIFO 等待；完成事件释放并发，窗口过期释放 RPM/TPM。单请求超过所有端点 TPM 上限时明确拒绝。",
+             "轻型请求在到达时立即完成，不占用端点。重型批释放时先调用批内排序，再逐条选择端点，每次分配立即更新状态。",
+             "排序后的批按释放顺序追加到容量等待队列，后续批不越过前批。队首容量不足时等待；完成事件释放并发，窗口过期释放 RPM/TPM。单请求超过所有端点 TPM 上限时明确拒绝。",
              "batch_wait_ms 约束收集批的等待，容量等待可能更长。输入结束时释放最后不足一批的请求，随后排空所有在途请求。", "",
              f"总请求：{s['total_requests']}；轻型：{s['light_requests']}；重型：{s['heavy_requests']}；完成：{s['completed_requests']}；拒绝：{s['rejected_requests']}。",
              f"Input-heavy：{s['input_heavy_requests']}；Output-heavy：{s['output_heavy_requests']}；Both：{s['both_heavy_requests']}。",
@@ -50,6 +51,6 @@ def write_outputs(result, config, directory, *, provenance=None):
     for endpoint in result.endpoints:
         lines.append(f"| {endpoint['endpoint_id']} | {endpoint['total_requests']} | {endpoint['total_tokens']} | {endpoint['peak_concurrency']} | {endpoint['rpm_limit']} | {endpoint['tpm_limit']} |")
     lines += ["", "`requests.csv` 含每条请求的分类、到达/批释放/调度/完成时刻、等待时间和调度前端点状态。",
-              "`events.jsonl` 保存状态变化；`batches.json` 保存批成员；`endpoints.json` 保存最终状态及峰值；`config.json` 保存本次参数。", ""]
+              "`events.jsonl` 保存状态变化；`batches.json` 的 request_ids 保存到达顺序、dispatch_order 保存排序后的计划顺序；CSV 的 batch_position 保存批内位置。拒绝请求也保留计划位置。`endpoints.json` 保存最终状态及峰值；`config.json` 保存本次参数。", ""]
     atomic_text(directory / "report.md", "\n".join(lines))
     return summary

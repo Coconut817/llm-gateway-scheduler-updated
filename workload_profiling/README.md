@@ -4,7 +4,7 @@
 
 | 模块 | 职责 | 文档 |
 | --- | --- | --- |
-| `baseline/` | 原始请求回放、重型批调度、模拟端点与可替换路由 | [架构](../docs/architecture.md)、[Python API](../docs/api.md) |
+| `baseline/` | 原始请求回放、可替换批内排序与路由、模拟端点 | [架构](../docs/architecture.md)、[Python API](../docs/api.md) |
 | `runtime/` | 当前请求计数、同步发送适配器、历史百分位策略 | [Python API](../docs/api.md)、[运行方式](../docs/running.md) |
 | `common/` | 消息规范化、Qwen 计数、路径、文件校验、数据关联 | [数据语义](../docs/architecture.md) |
 | `config/` | baseline 与独立的历史百分位策略配置 | [配置参数](../docs/running.md#配置文件) |

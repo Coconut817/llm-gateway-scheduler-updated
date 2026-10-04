@@ -73,9 +73,15 @@ heavy        = input_heavy OR output_heavy
 2. 最老请求等待达到 `batch_wait_ms`，原因 `timeout`；即使没有新请求到达也按时触发，新到达不会重置计时器。
 3. 原始输入结束，原因 `end_of_input`；最后不足一批也会处理。EOF 在下一次预定读取时发现，即最后到达加一个到达间隔。
 
-释放的批只是一次调度触发：批内请求仍逐条分配到端点，每分配一条立即更新状态再选择下一条。它不是模型 API 的张量 batch 或一次多 prompt 调用。
+释放时先调用 `order_batch(requests, endpoints, now_ms)`，得到本批请求的派发顺序，再逐条调用 `select(request, candidates, now_ms)` 选择端点，每分配一条立即更新状态再选择下一条。两种策略可以独立替换；这不是模型 API 的张量 batch 或一次多 prompt 调用。
 
-释放后进入 FIFO 容量等待队列。队首容量不足时等待，后续请求不会越过队首。`batch_wait_ms` 约束收集阶段，容量等待可能更长。相同时刻按“完成 → 到达 → 超时 → 调度”处理；到达凑满批与超时重合时，记录 `batch_size`。
+默认 batch_order=fifo，保持到达顺序；shortest_first/longest_first 分别按 input+output 总 tokens 升序/降序，同长保留到达顺序。旧 JSON 配置缺少 batch_order 时仍为 fifo。
+
+排序输入为冻结请求 tuple 和所有端点的冻结快照（包含忙碌端点）；返回完整 request_id 排列。排序时不预留容量，路由时才根据最新状态筛选可用端点。排序每次释放只调用一次，容量等待期间不重新调用。返回漏项、重复、陌生 ID 或非法类型会报错。
+
+排序后的批按释放先后追加到容量等待队列，后批不能越过前批。队首容量不足时等待，后续请求不会越过队首。`batch_wait_ms` 约束收集阶段，容量等待可能更长。相同时刻按“完成 → 到达 → 超时 → 调度”处理；到达凑满批与超时重合时，记录 `batch_size`。
+
+`batches.json` 的 request_ids 保留到达顺序、dispatch_order 记录排序后的计划顺序；请求行的 batch_position 为 0-based 计划位置。结果 CSV 本身仍按输入到达顺序排列。具体接入见 [排序与路由扩展](extensions.md)。
 
 ## 端点状态与策略
 

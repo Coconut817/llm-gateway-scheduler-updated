@@ -1,9 +1,9 @@
 <<<<<<< HEAD
 # 大模型请求批调度与路由 Baseline
 
-一个可复现的离线基线：逐条读取具有完整上下文的 prompt/response，将输入或输出长度达到阈值的请求放入重型队列，按批大小或等待超时触发调度，再路由到 RPM 利用率最低的可用模拟端点。轻型请求在到达时立即完成。
+一个可复现的离线基线：逐条读取具有完整上下文的 prompt/response，将输入或输出长度达到阈值的请求放入重型队列，按批大小或等待超时触发调度，先决定批内请求顺序，再逐条选择可用模拟端点。轻型请求在到达时立即完成。
 
-默认使用 **1ms 虚拟到达间隔**，三个模拟端点分别维护 RPM、TPM 和在途并发。路由策略可通过 Python 接口或 `module:attribute` 替换。输出长度来自数据中已记录的回答，当前基线不预测输出，不发送真实模型请求。
+默认使用 **1ms 虚拟到达间隔、FIFO 批内顺序和最小 RPM 占比路由**，三个模拟端点分别维护 RPM、TPM 和在途并发。批内排序与路由策略可独立通过 Python 接口或 `module:attribute` 替换。输出长度来自数据中已记录的回答，当前基线不预测输出，不发送真实模型请求。
 
 ## 快速开始
 
@@ -52,7 +52,8 @@ flowchart LR
     C -- 否 --> D[到达时立即完成]
     C -- 是 --> E[收集重型请求]
     E --> F[批大小 / 超时 / 输入结束触发]
-    F --> G[满足容量限制的端点]
+    F --> J[可替换批内排序策略]
+    J --> G[满足容量限制的端点]
     G --> H[可替换路由策略]
     H --> I[模拟完成与状态更新]
 ```
@@ -66,8 +67,14 @@ flowchart LR
 # 修改频率、批大小和最长收集等待时间
 & .\.venv\Scripts\python.exe baseline.py --arrival-interval-ms 1 --batch-size 8 --batch-wait-ms 10
 
+# 批内按总 tokens 最短优先，端点仍使用最小 RPM 占比路由
+& .\.venv\Scripts\python.exe baseline.py --limit 200 --batch-order shortest_first --output-dir workload_profiling/results/baseline_custom/shortest_first
+
 # 替换为随仓库提供的 TPM 策略，并使用长度示例
 & .\.venv\Scripts\python.exe baseline.py --source examples/length_requests.jsonl --source-format lengths --strategy examples.min_tpm:MinTpmStrategy --output-dir workload_profiling/results/baseline_custom
+
+# 同时使用自定义批内排序与路由
+& .\.venv\Scripts\python.exe baseline.py --source examples/length_requests.jsonl --source-format lengths --batch-size 2 --batch-wait-ms 3 --batch-order examples.output_first:OutputLongestFirstOrder --strategy examples.min_tpm:MinTpmStrategy --output-dir workload_profiling/results/baseline_custom/output_first
 
 # 所有测试
 & .\.venv\Scripts\python.exe -m unittest discover -s workload_profiling/tests -t .
@@ -108,7 +115,7 @@ flowchart LR
 | [安装与运行](docs/running.md) | 环境、所有 CLI 参数、网页、长度接口、测试、常见问题 |
 | [架构与数据语义](docs/architecture.md) | 完整上下文、虚拟时间、批触发、端点计数、目录职责 |
 | [Python 接口](docs/api.md) | 配置、请求对象、runner、source、execute、真实客户端接入 |
-| [扩展与策略接入](docs/extensions.md) | 替换路由、自定义输入、预测器与真实执行器的接入边界 |
+| [扩展与策略接入](docs/extensions.md) | 独立替换批内排序与路由、自定义输入、预测器与真实执行器的接入边界 |
 | [HTTP 接口](docs/http-api.md) | 启动回放、轮询、分页、下载、请求与响应示例 |
 | [结果字段](docs/results.md) | CSV、事件、批次、端点、summary 和指标解释 |
 | [历史离线分析](docs/offline-profiling.md) | Stage 1 / 2 / 2.1 的复现、数据依赖和旧接口 |
@@ -121,7 +128,4 @@ CLI 默认写入 `workload_profiling/results/baseline/`，网页写入其中的 
 `.gitignore` 排除了虚拟环境、tokenizer 下载、缓存、CSV 导出及默认本地回放结果。下载者需要自行重建这些目录；代码、配置、文档和小型示例可以独立跑通长度模式。`.gitignore` 不会自动移除已经被 Git 跟踪的文件，也不会自动忽略任意自定义输出目录。
 
 历史正式分析数据和报告继续保留，其来源与哈希记录不因文档整理而重算。当前附带数据的一次默认全量回放完成了 3,168 条请求，其中轻型 2,845、重型 323、拒绝 0；改变数据或参数后结果会变化。
-=======
-# llm-gateway-scheduler
-A scheduler for an LLM gateway
->>>>>>> ddfa2c9ea8f26ef97efdb2750a5a17de4cfdee35
+

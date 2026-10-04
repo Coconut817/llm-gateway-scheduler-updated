@@ -12,6 +12,7 @@
 | 用自己的 generator/队列提供长度请求 | `BaselineRunner.run()` |
 | 修改批大小、频率、端点 | `load_config()`、`dataclasses.replace()`、`EndpointConfig` |
 | 更换路由评分 | `RoutingStrategy.select()` 或 `load_strategy()` |
+| 更换一批请求的派发顺序 | `BatchOrderStrategy.order_batch()` 或 `load_batch_order()` |
 | 接入已有同步模型客户端并计数 | `runtime.RequestProcessor` |
 | 在自己的客户端发送前/后插入计数 | `prepare()` / `complete()` |
 | 使用固定输出 ECDF 与动态百分位阈值 | `PercentileReference`、`OutputHeavyPolicy` |
@@ -80,9 +81,10 @@ print(result.summary)
 print(result.requests[1]["endpoint_id"])
 ```
 
-签名：`BaselineRunner(config, *, strategy=None)`；`run(requests: Iterable[WorkloadRequest]) -> RunResult`。
+签名：`BaselineRunner(config, *, strategy=None, batch_order=None)`；`run(requests: Iterable[WorkloadRequest]) -> RunResult`。
 
 - 提供 strategy 实例时，使用该实例；否则根据 `config.strategy` 加载。
+- 提供 batch_order 实例时，使用该实例；否则根据 `config.batch_order` 加载。两个接口必须同步，分别在批释放和逐条派发时调用。
 - 按需消费 generator，不预加载原文。结果行、事件和批次仍保存在内存，内存用量会随请求数量增长。
 - 处理完 EOF 后释放最后一批，并排空容量等待和在途请求才返回。
 - 同一 runner 只能调用一次 `run()`；重复实验要创建新实例。
@@ -142,7 +144,8 @@ result, exported_summary = execute(
 
 ```text
 execute(config, *, source=DEFAULT_SOURCE, source_format="prompt", limit=None,
-        output=DEFAULT_OUTPUT, tokenizer=None, tokenizer_metadata=None, progress=None)
+        output=DEFAULT_OUTPUT, tokenizer=None, tokenizer_metadata=None, progress=None,
+        strategy=None, batch_order=None)
 ```
 
 | 参数 | 说明 |
@@ -155,10 +158,12 @@ execute(config, *, source=DEFAULT_SOURCE, source_format="prompt", limit=None,
 | `tokenizer` | prompt 模式可注入已加载 tokenizer，便于多次实验复用 |
 | `tokenizer_metadata` | 注入 tokenizer 时同时传其来源信息，供 provenance 记录 |
 | `progress` | 读取进度回调，与 reader 相同 |
+| `strategy` | 可选路由实例，覆盖 config.strategy 的实现 |
+| `batch_order` | 可选排序实例，覆盖 config.batch_order 的实现 |
 
 返回 `(RunResult, exported_summary)`。第二项包含 `provenance`，第一项的 `summary` 包含统计和 `wall_time_seconds`，但不包含导出的 provenance。执行前后比较源文件 SHA-256，变化则报错。lengths 模式不加载 tokenizer。
 
-传入外部 tokenizer 但不传 metadata 时，输出中的 tokenizer ID/revision 可能为空；不会推断外部对象的真实来源。`execute()` 使用配置内的策略规格；若要直接注入策略实例，使用 `BaselineRunner`。
+传入外部 tokenizer 但不传 metadata 时，输出中的 tokenizer ID/revision 可能为空；不会推断外部对象的真实来源。`execute()` 与 BaselineRunner 都支持策略实例注入，未注入时按配置规格加载。注入后 summary 的 strategy_class/batch_order_class 记录实际类，配置中的规格字符串保持原值；自定义构造参数需由调用方另行记录。
 
 ## 结果持久化
 
@@ -171,6 +176,27 @@ summary = write_outputs(result, config, "workload_profiling/results/baseline_exa
 ```
 
 `write_outputs(result, config, directory, *, provenance=None) -> dict` 写七个标准文件，返回带 provenance 的 summary。单文件采用临时文件替换；它不是跨七个文件的事务，也不会清理目录里其他文件。请为独立实验选择独立目录。
+
+## 批内排序接口
+
+`BatchOrderStrategy.order_batch(requests, endpoints, now_ms) -> Sequence[str]` 在每次非空批释放时调用一次，必须同步实现；无需继承 Protocol。requests 是按到达顺序排列的冻结 WorkloadRequest tuple，endpoints 是所有端点的冻结 EndpointView tuple，包括忙碌端点；now_ms 是批释放的虚拟毫秒时间。
+
+返回值为本批全部 request_id 的完整排列，推荐 list/tuple。字符串、set、generator、None 等非序列返回值报 TypeError；漏项、重复、陌生 ID 或非字符串元素报 ValueError。引擎在加入待调度队列前校验，不会接受部分排序。
+
+`load_batch_order(spec)` 支持 fifo/shortest_first/longest_first，或 `module:attribute` 的无参类、factory、已有实例。导出类分别为 FifoOrderStrategy、ShortestFirstOrderStrategy、LongestFirstOrderStrategy。后两者按 input+output 排序，同长保持到达顺序。
+
+```python
+from dataclasses import replace
+from workload_profiling.baseline import BaselineRunner, load_config
+from workload_profiling.baseline.source import read_length_requests
+
+config = replace(load_config(), batch_order="shortest_first", batch_size=2, batch_wait_ms=3)
+result = BaselineRunner(config).run(read_length_requests("examples/length_requests.jsonl"))
+print(result.batches[0]["request_ids"])
+print(result.batches[0]["dispatch_order"])
+```
+
+排序后按该顺序逐条进入容量等待队列；只调整当前批，后续批不越过前批，等待期间不重新排序。CSV 保持输入到达顺序，通过 batch_position 关联计划位置。自定义排序、路由同时注入与共享实例的接入方式见 [扩展指南](extensions.md#替换批内排序)。
 
 ## 路由接口与端点视图
 

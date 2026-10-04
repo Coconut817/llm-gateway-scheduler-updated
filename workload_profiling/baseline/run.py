@@ -19,7 +19,8 @@ DEFAULT_OUTPUT = RESULTS / "baseline"
 
 
 def execute(config, *, source=DEFAULT_SOURCE, source_format="prompt", limit=None,
-            output=DEFAULT_OUTPUT, tokenizer=None, tokenizer_metadata=None, progress=None):
+            output=DEFAULT_OUTPUT, tokenizer=None, tokenizer_metadata=None, progress=None,
+            strategy=None, batch_order=None):
     if limit is not None:
         positive_integer(limit, "limit")
     source, output = Path(source).resolve(), Path(output).resolve()
@@ -37,7 +38,7 @@ def execute(config, *, source=DEFAULT_SOURCE, source_format="prompt", limit=None
         requests = read_length_requests(source, limit=limit)
     else:
         raise ValueError("source_format must be prompt or lengths")
-    result = BaselineRunner(config).run(requests)
+    result = BaselineRunner(config, strategy=strategy, batch_order=batch_order).run(requests)
     if sha256_file(source) != source_hash:
         raise ValueError("Source changed during replay")
     result.summary["wall_time_seconds"] = round(time.perf_counter()-start, 3)
@@ -63,8 +64,9 @@ def main():
     parser.add_argument("--input-threshold", type=float)
     parser.add_argument("--output-threshold", type=float)
     parser.add_argument("--strategy", help="min_rpm or importable.module:class_or_factory")
+    parser.add_argument("--batch-order", help="fifo, shortest_first, longest_first or importable.module:class_or_factory")
     args = parser.parse_args()
-    overrides = {name: getattr(args, name) for name in ("arrival_interval_ms", "batch_size", "batch_wait_ms", "strategy") if getattr(args, name) is not None}
+    overrides = {name: getattr(args, name) for name in ("arrival_interval_ms", "batch_size", "batch_wait_ms", "strategy", "batch_order") if getattr(args, name) is not None}
     for argument, field in (("input_threshold", "input_threshold_tokens"), ("output_threshold", "output_threshold_tokens")):
         if getattr(args, argument) is not None:
             overrides[field] = getattr(args, argument)

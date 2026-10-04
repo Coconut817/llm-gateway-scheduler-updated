@@ -18,7 +18,7 @@ CLI 可用 `--output-dir`，Python 可用 execute 的 output 覆盖。每次持�
 | `summary.json` | 全局数量、延迟与等待统计、端点分配、来源记录 |
 | `requests.csv` | 每条请求最终轨迹；UTF-8 BOM |
 | `events.jsonl` | 按处理顺序保存的事件，每行一个 JSON 对象 |
-| `batches.json` | 批成员、释放时刻和触发原因 |
+| `batches.json` | 批成员、排序后的计划顺序、释放时刻和触发原因 |
 | `endpoints.json` | 最终窗口状态、累计量和峰值 |
 | `report.md` | 本轮设置、语义与结果的文字说明 |
 
@@ -38,6 +38,7 @@ CLI 可用 `--output-dir`，Python 可用 execute 的 output 覆盖。每次持�
 | `input_heavy`、`output_heavy`、`heavy` | 两轴命中与 OR 结果；边界采用 >= |
 | `arrival_at_ms` | 虚拟到达时刻 |
 | `batch_id` | 0-based 批编号；轻型为空 |
+| `batch_position` | 排序后的 0-based 批内计划位置；轻型为空，拒绝请求也保留位置 |
 | `batch_trigger` | batch_size/timeout/end_of_input；轻型为空 |
 | `batch_released_at_ms` | 收集批释放时刻 |
 | `batch_wait_ms` | 批释放-到达；轻型为 0 |
@@ -61,7 +62,9 @@ CSV 空单元格是缺失，不是 0、false 或第一个端点。JSON 中同样
 
 ## batches JSON
 
-每个元素包含 batch_id、trigger、released_at_ms、size、request_ids。一个双重型请求只在一个 batch 中出现一次；触发批大小依据重型收集数，轻型不计入。批大小可小于配置值，因为超时或 EOF 提前释放。
+每个元素包含 batch_id、trigger、released_at_ms、size、request_ids、dispatch_order。request_ids 为到达顺序，dispatch_order 为排序后的计划顺序，两者包含完全相同的 ID。一个双重型请求只在一个 batch 中出现一次；触发批大小依据重型收集数，轻型不计入。批大小可小于配置值，因为超时或 EOF 提前释放。
+
+dispatch_order 包含最终被拒绝的请求，因此它不等于成功派发/完成顺序。实际派发顺序查看 events 的 dispatched；完成顺序可能受长度、端点速度和并发影响。跨批按释放顺序执行，等待期间不重排。
 
 ## events JSONL
 
@@ -73,7 +76,7 @@ CSV 空单元格是缺失，不是 0、false 或第一个端点。JSON 中同样
 | `light_completed` | request_id |
 | `batch_released` | 完整批次字段 |
 | `capacity_wait` | 当前无法分配的队首 request_id；可能多次记录 |
-| `dispatched` | request_id、endpoint_id、batch_id、finished_at_ms、endpoint_state_after |
+| `dispatched` | request_id、endpoint_id、batch_id、batch_position、finished_at_ms、endpoint_state_after |
 | `completed` | request_id、endpoint_id、concurrency_after |
 | `rejected` | request_id、reason |
 
@@ -96,6 +99,7 @@ dispatched 的 endpoint_state_after 包含上限、窗口请求数/token 数和�
 | --- | --- |
 | `clock`、`output_length_mode` | virtual_ms、oracle_recorded_response |
 | `strategy`、`strategy_class` | 配置规格与实际策略类；直接注入实例时可能不同 |
+| `batch_order`、`batch_order_class` | 批内排序规格与实际排序类；旧配置默认 fifo |
 | `total_requests`、`light_requests`、`heavy_requests` | 总量、轻型、两轴 OR 后的重型 |
 | `input_heavy_requests`、`output_heavy_requests`、`both_heavy_requests` | 重型交叉统计，不能简单把两轴相加 |
 | `completed_requests`、`rejected_requests` | 最终状态计数，包含轻型完成 |
@@ -114,4 +118,4 @@ provenance 包含 created_at（Asia/Shanghai）、source 绝对路径、source_s
 
 先检查 source/config 是否对应本次实验，再检查 completed+rejected=total、light+heavy=total，以及双轴交集计算是否一致。然后看批触发和 batch_wait/capacity_wait 的分解，最后比较端点调度数、利用率和峰值。
 
-比较不同策略要固定同一输入、阈值、到达间隔、批参数、端点容量和速度；只改变策略规格。实际墙钟耗时受到 tokenization/磁盘/机器状态影响，不应代替虚拟调度延迟。
+比较不同路由策略时固定 batch_order，比较批内排序时固定 strategy；同时固定输入、阈值、到达间隔、批参数、端点容量和速度。实际墙钟耗时受到 tokenization/磁盘/机器状态影响，不应代替虚拟调度延迟。
