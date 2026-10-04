@@ -1,0 +1,2 @@
+# Keep one dependency lock source; this file is the GitHub quick-start entry.
+-r workload_profiling/requirements.txt

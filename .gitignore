@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+workload_profiling/data/tokenizer/
+workload_profiling/cache/
+.checkpoints/
+
+# Rebuildable exports and local replay runs (historical stage reports stay visible).
+workload_profiling/data/exports/
+workload_profiling/results/baseline/
+workload_profiling/results/baseline_example/
+workload_profiling/results/baseline_custom/
+.pytest_cache/
+.DS_Store
+Thumbs.db

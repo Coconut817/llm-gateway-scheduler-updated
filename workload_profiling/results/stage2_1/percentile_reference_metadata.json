@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "created_at_utc": "2026-10-03T11:18:37.933694+00:00",
+  "source_dataset": "workload_profiling/data/processed/request_lengths.parquet",
+  "source_sha256": "adede0767c1476a310325aa7fe2d3ec17791bca740797caee38c092df31d88c3",
+  "source_column": "output_tokens",
+  "reference_sample_count": 5186,
+  "unique_length_count": 754,
+  "percentile_definition": "empirical_cdf_right",
+  "percentile_formula": "count(reference.output_tokens <= x) / reference_sample_count",
+  "ties_policy": "All equal lengths share the same right ECDF value; each request has unit weight",
+  "below_minimum": 0.0,
+  "at_or_above_maximum": 1.0,
+  "reference_update_policy": "FIXED_OFFLINE_REFERENCE; no runtime updates",
+  "meaning": "Historical rank; not an EVT tail probability or an output-length prediction",
+  "length_semantics": "Inherited Stage 1 Qwen/Qwen3-8B offline tokenizer proxy lengths",
+  "reference_artifact": "workload_profiling/data/artifacts/output_percentile_reference.parquet",
+  "artifact_sha256": "6e4bb829c087becd5a083bfd81413700b8c85644793d623a3fa4c32aa3a0e971",
+  "labels_artifact": "workload_profiling/data/processed/output_labels.parquet",
+  "labels_sha256": "b88f5280759c63911b54fe36b8292ac2c2271d958cc12906c0dca44bd0195c91"
+}
