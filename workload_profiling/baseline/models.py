@@ -1,9 +1,11 @@
 """Request and endpoint state; tokens are reserved in full at dispatch."""
 from collections import deque
 from dataclasses import dataclass, field
+import hashlib
+import json
 import math
 
-from .config import EndpointConfig, positive_integer
+from .config import EndpointConfig, positive_integer, finite_number
 
 
 @dataclass(frozen=True)
@@ -12,6 +14,9 @@ class WorkloadRequest:
     input_tokens: int
     output_tokens: int
     source_line: int | None = None
+    base_priority: float = 1.0
+    priority_class: str = "normal"
+    priority_source: str = "default"
 
     def __post_init__(self):
         if not isinstance(self.request_id, str) or not self.request_id:
@@ -20,6 +25,11 @@ class WorkloadRequest:
             positive_integer(getattr(self, name), name, allow_zero=True)
         if self.source_line is not None:
             positive_integer(self.source_line, "source_line", allow_zero=True)
+        finite_number(self.base_priority, "base_priority")
+        if self.priority_class not in ("high", "normal", "low", "custom"):
+            raise ValueError("priority_class must be high, normal, low or custom")
+        if self.priority_source not in ("default", "recorded", "synthetic"):
+            raise ValueError("Invalid priority_source")
 
     @property
     def total_tokens(self):
@@ -89,9 +99,24 @@ class EndpointState:
         self.peak_concurrency = max(self.peak_concurrency, self.concurrency)
         self.peak_requests_in_window = max(self.peak_requests_in_window, len(self.window))
         self.peak_tokens_in_window = max(self.peak_tokens_in_window, self.tokens_in_window)
+        return now_ms + self.service_time_ms(request)
+
+    def service_multiplier(self, request):
+        """Stable per request/endpoint draw, independent of dispatch order and time."""
         c = self.config
-        return now_ms + max(1, math.ceil(c.base_latency_ms + request.input_tokens / c.input_tokens_per_ms
-                                       + request.output_tokens / c.output_tokens_per_ms))
+        if c.service_jitter_fraction == 0:
+            return 1.0
+        key = json.dumps([c.service_jitter_seed, request.request_id, c.endpoint_id],
+                         ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        draw = int.from_bytes(hashlib.sha256(key).digest()[:8], "big") >> 11
+        uniform = draw / (2 ** 53)
+        return 1 + c.service_jitter_fraction * (2 * uniform - 1)
+
+    def service_time_ms(self, request):
+        c = self.config
+        nominal = (c.base_latency_ms + request.input_tokens / c.input_tokens_per_ms
+                   + request.output_tokens / c.output_tokens_per_ms)
+        return max(1, math.ceil(nominal * self.service_multiplier(request)))
 
     def complete(self):
         if self.concurrency <= 0:

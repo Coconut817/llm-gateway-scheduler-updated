@@ -1,5 +1,8 @@
-<<<<<<< HEAD
 # 大模型请求批调度与路由 Baseline
+
+当前修改与交接入口：[修改记录与交接使用说明](docs/handoff-guide.md)。其中记录新增的全请求入窗执行模式、环境场景、运行命令、结果目录和待实现功能。下文默认快速开始仍使用旧 heavy_only 模式；新全请求基线请使用 `workload_profiling/config/baseline_all_requests.json`。
+
+接手同学先按 [接手使用说明](docs/handoff-start.md) 跑样例和当前动态功能；具体动态参数见 [动态功能说明](docs/dynamic-output.md)，完整阶段记录在 [修改与实验档案](docs/change-history.md)。当前平级动态入口配置为 `workload_profiling/config/baseline_dynamic_output.json`。
 
 一个可复现的离线基线：逐条读取具有完整上下文的 prompt/response，将输入或输出长度达到阈值的请求放入重型队列，按批大小或等待超时触发调度，先决定批内请求顺序，再逐条选择可用模拟端点。轻型请求在到达时立即完成。
 

@@ -5,6 +5,7 @@ from pathlib import Path
 from ..common.conversation import normalize_message
 from ..common.tokenization import LengthCounter
 from .models import WorkloadRequest
+from .priority import priority_fields
 
 
 def read_prompt_requests(source, tokenizer, *, limit=None, progress=None):
@@ -25,11 +26,12 @@ def read_prompt_requests(source, tokenizer, *, limit=None, progress=None):
                 controls = {k: prompt[k] for k in ("tool_choice", "parallel_tool_calls") if k in prompt}
                 lengths = counter.input_lengths(messages, tools=prompt.get("tools"), prompt_controls=controls)
                 output = counter.output_length(row["response"])
+                priorities = priority_fields(row)
             except (ValueError, TypeError, KeyError, IndexError) as error:
                 raise ValueError(f"Invalid prompt/response or tokenization at source line {index + 1} ({type(error).__name__})") from None
             if progress and (index + 1) % 100 == 0:
                 progress(index + 1)
-            yield WorkloadRequest(f"request_{index:06d}", lengths["input_tokens"], output, index)
+            yield WorkloadRequest(f"request_{index:06d}", lengths["input_tokens"], output, index, **priorities)
 
 
 def read_length_requests(source, *, limit=None):
@@ -41,6 +43,6 @@ def read_length_requests(source, *, limit=None):
             try:
                 row = json.loads(line)
                 yield WorkloadRequest(row.get("request_id", f"request_{index:06d}"),
-                                      row["input_tokens"], row["output_tokens"], index)
+                                      row["input_tokens"], row["output_tokens"], index, **priority_fields(row))
             except (ValueError, TypeError, KeyError) as error:
                 raise ValueError(f"Invalid length record at source line {index + 1} ({type(error).__name__})") from None

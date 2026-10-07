@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 import math
 from numbers import Real
 from pathlib import Path
@@ -36,6 +37,7 @@ class OutputHeavyPolicy:
     def __init__(self, reference: PercentileReference | None = None,
                  congestion_provider: CongestionProvider | None = None, config_path=CONFIG_PATH):
         config = load_config(config_path)
+        self._configuration = deepcopy(config)
         if reference is not None and not isinstance(reference, PercentileReference):
             raise ValueError("reference must be a PercentileReference")
         if congestion_provider is not None and not isinstance(congestion_provider, CongestionProvider):
@@ -48,6 +50,11 @@ class OutputHeavyPolicy:
         self._mapping = {CongestionState(key): float(value) for key, value in config["congestion_threshold_mapping"].items()}
         self._manual_threshold = None
         self._congestion_state = None
+
+    @property
+    def configuration(self):
+        """Snapshot of the validated rules actually loaded, isolated from mutation."""
+        return deepcopy(self._configuration)
 
     def _refresh_provider(self):
         if self.congestion_provider is not None:

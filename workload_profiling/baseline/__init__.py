@@ -4,9 +4,9 @@ from .engine import BaselineRunner, RunResult
 from .models import EndpointView, WorkloadRequest
 from .routing import MinRpmStrategy, RoutingStrategy, load_strategy
 from .ordering import (BatchOrderStrategy, FifoOrderStrategy, ShortestFirstOrderStrategy,
-                       LongestFirstOrderStrategy, load_batch_order)
+                       LongestFirstOrderStrategy, EffectivePriorityOrderStrategy, LightFirstFifoOrderStrategy, load_batch_order)
 
 __all__ = ["BaselineConfig", "EndpointConfig", "load_config", "BaselineRunner",
            "RunResult", "EndpointView", "WorkloadRequest", "MinRpmStrategy",
            "RoutingStrategy", "load_strategy", "BatchOrderStrategy", "FifoOrderStrategy",
-           "ShortestFirstOrderStrategy", "LongestFirstOrderStrategy", "load_batch_order"]
+           "ShortestFirstOrderStrategy", "LongestFirstOrderStrategy", "EffectivePriorityOrderStrategy", "LightFirstFifoOrderStrategy", "load_batch_order"]

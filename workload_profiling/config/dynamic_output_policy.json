@@ -1,0 +1,16 @@
+{
+  "default_threshold": 0.8,
+  "congestion_threshold_mapping": {
+    "idle": 0.9,
+    "normal": 0.8,
+    "busy": 0.7,
+    "critical": 0.6
+  },
+  "percentile_definition": "empirical_cdf_right",
+  "reference_sample_count": null,
+  "pressure_rules": {
+    "normal_concurrency_threshold": 0.6,
+    "busy_concurrency_threshold": 0.85,
+    "critical_excess_ratio": 1.0
+  }
+}

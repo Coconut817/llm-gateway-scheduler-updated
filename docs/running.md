@@ -73,13 +73,25 @@ CLI 覆盖优先于配置文件；未提供的参数沿用配置。覆盖只影�
 | `--source-format prompt\|lengths` | `prompt` | 数据解析方式 |
 | `--output-dir PATH` | 包内 `results/baseline/` | 结果目录 |
 | `--limit N` | 全部 | 正整数，只读取前 N 条；CLI 的 0 无效 |
-| `--arrival-interval-ms N` | 配置中的 1 | 正整数，虚拟到达间隔 |
+| `--arrival-interval-ms N` | 配置中的 1 | 正整数；fixed 为实际间隔，burst 为确定总跨度与 EOF 的标称间隔 |
+| `--arrival-mode fixed\|burst` | fixed | 固定或确定性突发到达，见 [突发到达](burst-arrivals.md) |
+| `--burst-size N` | 512 | 每组最多请求数，至少 2 |
+| `--burst-span-ms N` | 20 | 组内原始跨度；全表归一化后实际跨度可能不同 |
 | `--batch-size N` | 配置中的 16 | 正整数，重型收集数量 |
 | `--batch-wait-ms N` | 配置中的 20 | 非负整数，最老重型收集等待；0 立即释放 |
+| `--batch-scope heavy_only\|all` | heavy_only | 旧模式仅重型入窗、轻型零耗时；all 为所有请求同窗并执行，见 [交接说明](handoff-guide.md) |
+| `--priority-assignment uniform\|synthetic` | uniform | 是否给缺失业务标签的请求生成固定种子优先级；显式标签保留 |
+| `--priority-seed N` | 20261006 | 非负整数，合成优先级标签种子 |
+| `--priority-high-weight X`、`--priority-normal-weight X`、`--priority-low-weight X` | 10/3/1 | 合成业务标签权重，高>普通>低>0；显式源字段不覆盖 |
+| `--heavy-priority-discount X` | 1 | 0<X<=1；有效优先级=基础优先级乘重型系数；仅 effective_priority 排序使用 |
+| `--output-classification tokens\|percentile_fixed\|percentile_dynamic` | tokens | 输出判定模式；百分位模式要求所有请求入窗，参考文件固定，见交接说明 |
+| `--output-percentile-threshold X` | 0.8 | (0,1)内固定门槛或动态初始状态；动态首次采样立即按映射更新 |
+| `--output-policy PATH` | 包内dynamic_output_policy.json | 百分位模式的门槛/压力规则JSON；见 [动态功能](dynamic-output.md) |
+| `--output-reference PATH`、`--output-reference-metadata PATH` | 包内冻结参考与metadata | 成对指定参考Parquet和metadata，校验哈希与样本数 |
 | `--input-threshold X` | 配置中的 40342.5 | 有限非负数，tokens，包含等号 |
 | `--output-threshold X` | 配置中的 578 | 有限非负数，tokens，包含等号 |
 | `--strategy SPEC` | 配置中的 `min_rpm` | 内置策略或 `module:attribute` |
-| `--batch-order SPEC` | 配置中的 `fifo` | fifo/shortest_first/longest_first 或 `module:attribute`；控制批内派发顺序 |
+| `--batch-order SPEC` | 配置中的 `fifo` | fifo/shortest_first/longest_first/effective_priority/light_first_fifo 或 `module:attribute`；控制批内派发顺序 |
 | `-h`、`--help` | — | 帮助后退出 |
 
 退出码 0 表示成功且没有拒绝；拒绝请求或 argparse/输入配置错误为 2。其他未被捕获的运行异常可能为 1。出现拒绝时仍会导出该次完整结果；输入或配置失败时不应将目录中的旧结果当作本次成功产物。

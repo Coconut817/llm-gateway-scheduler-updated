@@ -1,5 +1,7 @@
 # Python 接口与接入方式
 
+当前新增功能与配置以 [改动汇总](handoff-guide.md) 和 [动态功能说明](dynamic-output.md) 为准。默认heavy_only仍兼容旧接口；全请求执行需all，百分位模式有自动策略/参考快照，主引擎未启用跨批排序。接手运行先看 [使用步骤](handoff-start.md)。
+
 [返回首页](../README.md) · [路由扩展](extensions.md) · [HTTP API](http-api.md)
 
 默认从仓库根导入。新调度 API 位于 `workload_profiling.baseline`；当前请求计数/发送 API 位于 `workload_profiling.runtime`。两者职责不同。

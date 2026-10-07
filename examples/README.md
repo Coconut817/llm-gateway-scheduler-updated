@@ -2,6 +2,8 @@
 
 所有命令从仓库根目录执行；先按 [安装说明](../docs/running.md#环境安装) 安装依赖。Windows 命令中的解释器可替换为 Linux/macOS 的 `.venv/bin/python`。
 
+接手当前全请求/动态功能请先读 [接手说明](../docs/handoff-start.md)，通过baseline.py运行。下面1～5是原项目基础示例，默认heavy_only；后面的对照脚本索引属于新增研究工具。
+
 | 文件 | 用途 | 是否需要 tokenizer |
 | --- | --- | --- |
 | `length_requests.jsonl` | 9 条人工长度请求，覆盖轻型、输入重型、输出重型和双重型 | 否 |
@@ -61,3 +63,33 @@
 每行输出一个长度结果。`--lengths-only` 表示不加载 Stage 2.1 策略；演示 sender 返回固定说明文本。换成自己的同步模型客户端后才会发送真实请求，详见 [Python 接口](../docs/api.md#接入已有模型客户端)。
 
 重复使用相同输出目录会覆盖本次导出的七个标准文件；比较不同实验时请使用不同 `--output-dir`。
+
+## 新增对照与诊断脚本
+
+这些脚本组织实验，不是新的独立服务。对照脚本通常拒绝已有输出根目录，重跑用 `--output-dir` 取新名称。默认输入依赖如下；具体命令及完整结果见 [改动索引](../docs/handoff-guide.md) 和 [详细档案](../docs/change-history.md)。
+
+| 模块（python -m 后的名称） | 用途 | 默认依赖 | 正式结果目录名 |
+| --- | --- | --- | --- |
+| examples.compare_service_jitter | 无波动/±20%对照 | handoff_v1配置与原始prompt | service_jitter_v1 |
+| examples.compare_endpoint_speed | 20/20/20与30/20/10 | handoff_v1、原文 | endpoint_speed_v1 |
+| examples.compare_burst_arrivals | 固定/突发到达 | handoff_v1、原文 | burst_arrivals_v1 |
+| examples.rebuild_all_requests_baseline | 旧模式与全请求 | handoff_v1、原文 | all_requests_v1 |
+| examples.compare_priority | 原排序/优先级/折扣，两种额度 | all_requests_v1/all_requests、原文 | priority_v1 |
+| examples.compare_priority（权重参数） | 3/2/1与10/3/1 | 同上；--compare-results指定priority_v1 | priority_weights_321_v1 |
+| examples.compare_priority_burst | 并发竞争下有无折扣 | priority_weights_321_v1、原文 | priority_burst_321_v1 |
+| examples.diagnose_priority_burst | 独立跨批/服务时间诊断 | priority_burst_321_v1已验证CSV与批记录 | priority_burst_diagnosis_v3 |
+| examples.compare_batch_sizes | 16/64/128/256/512 | priority_burst_321_v1与diagnosis_v3 | batch_size_v2 |
+| examples.compare_dynamic_threshold | 平级最短输出/固定80%/动态 | priority_burst_321_v1长度CSV、冻结ECDF及metadata | dynamic_output_v1 |
+
+结果名均在workload_profiling/results/reproduction下。部分原文对照读取reference中provenance.source的绝对路径；换机器应重建本机基础结果或正确指定reference，不能只复制旧结果后照抄命令。diagnose脚本不改主engine，也不调用模型。
+
+辅助模块：output_shortest_first提供仅输出长度升序；concurrency_audit逐事件核对并发与额度；comparison_common允许新增优先级列并核对历史字段。它们不是需要单独启动的实验服务。
+
+例如重跑平级动态对照（须已有默认reference资源）：
+
+```powershell
+& .\.venv\Scripts\python.exe -m examples.compare_dynamic_threshold `
+  --output-dir workload_profiling/results/reproduction/handoff_dynamic_comparison
+```
+
+没有历史结果包时，先使用handoff-start.md里的普通CLI和长度样例，不必运行这串依赖实验。

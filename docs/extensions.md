@@ -147,7 +147,7 @@ def adapt(records):
         )
 ```
 
-tokens 必须已是非负整数，不应把缺失 usage 默默转成 0。每次 run 的 ID 唯一；到达时间仍按固定 interval 生成，原始时间戳不会自动生效。
+tokens 必须已是非负整数，不应把缺失 usage 默默转成 0。每次 run 的 ID 唯一；到达时间由 fixed 或 burst 配置生成，原始日志时间戳不会自动生效。burst 是有限数据的预设时间表，见 [突发到达](burst-arrivals.md)。
 
 需要计 prompt 时复用 `load_tokenizer()`、`LengthCounter.input_lengths()` 与 `output_length()`，保证与默认口径一致。不要把完整会话展开接口当作当前请求入口，详见 [数据语义](architecture.md#三种请求口径)。
 
@@ -181,7 +181,7 @@ Baseline 的 EndpointConfig 只有容量和模拟速度，没有 URL、API key�
 
 | 扩展 | 当前边界 / 主要位置 |
 | --- | --- |
-| 不规则到达或日志时间戳 | engine.py 的固定 next_arrival 生成逻辑 |
+| 自定义到达或日志时间戳 | 已有 fixed/burst 模式；任意外部时间戳仍需扩展 arrivals.py 与 engine.py |
 | 模型/端点兼容关系 | WorkloadRequest 没有 model 字段；需扩展模型和候选筛选 |
 | 自适应 Heavy 阈值 | 目前每次 run 使用固定 config 阈值，需明确更新事件与审计记录 |
 | 动态启停端点 | 当前 endpoints 为固定配置 tuple，需增加生命周期事件 |

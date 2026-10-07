@@ -53,7 +53,9 @@ baseline 逐行读取 UTF-8/UTF-8 BOM JSONL，取 `row["prompt"]["messages"]`，
 
 ## 虚拟时钟与重型分类
 
-第 i 个请求在 `i * arrival_interval_ms` 到达，第 0 条在 0ms。实现按行惰性消费原文；到达间隔属于虚拟模型，不是每隔 1ms 墙钟 sleep。tokenization、绘图或磁盘耗时不改变模拟到达时间。
+默认 fixed 模式第 i 个请求在 `i * arrival_interval_ms` 到达，第 0 条在 0ms。实现按行惰性消费原文；到达间隔属于虚拟模型，不是每隔 1ms 墙钟 sleep。tokenization、绘图或磁盘耗时不改变模拟到达时间。
+
+可选 burst 模式预读取全部请求并构建确定性到达时间表，保持首末时刻和请求顺序相同，允许同一毫秒多条请求。实际间隔不固定，标称 interval 仅确定总跨度和 EOF。详见 [突发到达](burst-arrivals.md)。
 
 ```text
 input_heavy  = input_tokens  >= input_threshold_tokens
@@ -63,11 +65,13 @@ heavy        = input_heavy OR output_heavy
 
 默认阈值 40342.5 和 578 是操作参数，采用旧展开样本的 P95 数值作为起点。它们不是原始 3,168 行数据的重新估计结果，也不是稳定 EVT onset。设某轴阈值为 0 会让该轴全部命中。
 
+上述为默认output_classification=tokens模式。新百分位模式要求所有请求入窗：固定输入阈值，批释放前用冻结输出ECDF与本批门槛分类；percentile_fixed门槛固定，percentile_dynamic按当前并发/已到达需求调整。分类被冻结，不在等待中改标签。light_first_fifo仅稳定分组轻先重后，组内FIFO。见 [交接说明](handoff-guide.md)。
+
 分类前使用已记录回答的输出长度，模式名为 `oracle_recorded_response`。这使基线可比较已知工作量的调度行为；发送前的真实输出预测并未实现，接入边界见 [扩展指南](extensions.md)。
 
 ## 收集批与执行队列
 
-轻型请求在到达时完成，延迟 0，不占用模拟端点。重型进入收集队列，满足任一条件释放：
+默认 batch_scope=heavy_only 时，轻型请求在到达时完成，延迟 0，不占用模拟端点，只有重型进入收集队列。新 batch_scope=all 模式下，所有轻重请求进入同一收集队列并消耗端点容量，分类标签仅用于统计，尚无优先级折扣。两种模式均满足任一条件释放：
 
 1. 队列达到 `batch_size`，原因 `batch_size`。
 2. 最老请求等待达到 `batch_wait_ms`，原因 `timeout`；即使没有新请求到达也按时触发，新到达不会重置计时器。

@@ -8,6 +8,8 @@ import math
 from .models import EndpointState, WorkloadRequest
 from .ordering import load_batch_order, validate_batch_order
 from .routing import load_strategy
+from .arrivals import burst_arrival_times
+from .priority import assign_priority, effective_priority
 
 
 @dataclass
@@ -17,15 +19,23 @@ class RunResult:
     batches: list[dict]
     endpoints: list[dict]
     summary: dict
+    classification_artifacts: dict | None = None
 
 
 class BaselineRunner:
-    def __init__(self, config, *, strategy=None, batch_order=None):
+    def __init__(self, config, *, strategy=None, batch_order=None, classification_policy=None):
         self.config = config
+        if classification_policy is not None and config.output_classification == "tokens":
+            raise ValueError("Injected percentile policy requires percentile output_classification")
+        self.classification_policy = classification_policy
+        if config.output_classification != "tokens" and classification_policy is None:
+            from .classification import OutputPercentileClassifier
+            self.classification_policy = OutputPercentileClassifier.load_default(config)
         self.strategy = strategy if strategy is not None else load_strategy(config.strategy)
         if not callable(getattr(self.strategy, "select", None)):
             raise TypeError("strategy must implement select")
-        self.batch_order = batch_order if batch_order is not None else load_batch_order(config.batch_order)
+        self.batch_order = batch_order if batch_order is not None else load_batch_order(
+            config.batch_order, config=config, classification_policy=self.classification_policy)
         if not callable(getattr(self.batch_order, "order_batch", None)):
             raise TypeError("batch_order must implement order_batch")
         if inspect.iscoroutinefunction(self.strategy.select) or inspect.iscoroutinefunction(self.batch_order.order_batch):
@@ -39,6 +49,10 @@ class BaselineRunner:
         config = self.config
         endpoints = [EndpointState(e) for e in config.endpoints]
         by_id = {e.config.endpoint_id: e for e in endpoints}
+        arrival_times = None
+        if config.arrival_mode == "burst":
+            requests = tuple(requests)
+            arrival_times = burst_arrival_times(len(requests), config)
         source = iter(requests)
         rows, events, batches = [], [], []
         pending, ready, running = deque(), deque(), []
@@ -55,6 +69,17 @@ class BaselineRunner:
             members = list(pending)
             requests = tuple(request for request, _ in members)
             views = tuple(endpoint.view(now, config.window_ms) for endpoint in endpoints)
+            classification_snapshot = None
+            if self.classification_policy is not None:
+                decisions, classification_snapshot = self.classification_policy.classify_batch(
+                    requests, views, len(ready), now, batch_id)
+                if set(decisions) != {r.request_id for r in requests}:
+                    raise ValueError("Classifier must classify every batch member")
+                for request, row in members:
+                    row.update(decisions[request.request_id])
+                    row["priority_discount"] = config.heavy_priority_discount if row["heavy"] else 1.0
+                    row["effective_priority"] = request.base_priority * row["priority_discount"]
+                event("classification_updated", **classification_snapshot)
             ordered_ids = validate_batch_order(requests, self.batch_order.order_batch(requests, views, now))
             members_by_id = {request.request_id: (request, row) for request, row in members}
             pending.clear()
@@ -62,6 +87,8 @@ class BaselineRunner:
                      "size": len(members), "request_ids": [r[0].request_id for r in members],
                      "dispatch_order": list(ordered_ids)}
             batches.append(batch)
+            if classification_snapshot is not None:
+                batch["classification"] = classification_snapshot
             event("batch_released", **batch)
             for position, request_id in enumerate(ordered_ids):
                 request, row = members_by_id[request_id]
@@ -94,7 +121,7 @@ class BaselineRunner:
                 row["status"] = "completed"
                 event("completed", request_id=row["request_id"], endpoint_id=endpoint_id,
                       concurrency_after=by_id[endpoint_id].concurrency)
-            if next_arrival == now:
+            while next_arrival == now:
                 try:
                     request = next(source)
                 except StopIteration:
@@ -103,6 +130,7 @@ class BaselineRunner:
                 else:
                     if not isinstance(request, WorkloadRequest):
                         raise TypeError("Replay expects WorkloadRequest objects")
+                    request = assign_priority(request, config)
                     if request.request_id in seen:
                         raise ValueError(f"Duplicate request_id: {request.request_id}")
                     seen.add(request.request_id)
@@ -112,6 +140,8 @@ class BaselineRunner:
                     row = {**asdict(request), "total_tokens": request.total_tokens,
                            "arrival_at_ms": now, "input_heavy": input_heavy,
                            "output_heavy": output_heavy, "heavy": heavy,
+                           "effective_priority": effective_priority(request, config),
+                           "priority_discount": config.heavy_priority_discount if heavy else 1.0,
                            "batch_id": None, "batch_position": None, "batch_trigger": None, "batch_released_at_ms": None,
                            "batch_wait_ms": 0, "capacity_wait_ms": 0, "queue_wait_ms": 0,
                            "endpoint_id": None, "dispatch_at_ms": None, "finished_at_ms": None,
@@ -120,15 +150,28 @@ class BaselineRunner:
                            "endpoint_concurrency_before": None, "rpm_utilization_before": None,
                            "tpm_utilization_before": None, "concurrency_utilization_before": None}
                     rows.append(row)
+                    if self.classification_policy is not None:
+                        row.update(output_heavy=None, heavy=None, effective_priority=None, priority_discount=None,
+                                   output_percentile=None, output_percentile_threshold=None, output_token_cutoff=None,
+                                   threshold_source=None, pressure_level=None, classified_at_ms=None)
                     event("arrived", request_id=request.request_id, heavy=heavy)
-                    if heavy:
+                    if self.classification_policy is not None:
+                        events[-1]["heavy"] = None
+                        events[-1]["classification_pending"] = True
+                    if heavy or config.batch_scope == "all":
                         pending.append((request, row))
                         if len(pending) >= config.batch_size:
                             release("batch_size")
                     else:
                         row.update(status="completed", finished_at_ms=now)
                         event("light_completed", request_id=request.request_id)
-                    next_arrival += config.arrival_interval_ms
+                    if arrival_times is None:
+                        next_arrival += config.arrival_interval_ms
+                    elif len(rows) < len(arrival_times):
+                        next_arrival = arrival_times[len(rows)]
+                    else:
+                        # Same EOF convention as fixed mode: one nominal interval later.
+                        next_arrival = now + config.arrival_interval_ms
             if pending and pending[0][1]["arrival_at_ms"] + config.batch_wait_ms <= now:
                 release("timeout")
             while ready:
@@ -178,6 +221,9 @@ class BaselineRunner:
                            "peak_tokens_in_window": endpoint.peak_tokens_in_window})
         heavy_rows = [r for r in rows if r["heavy"]]
         completed_heavy = [r for r in heavy_rows if r["status"] == "completed"]
+        completed = [r for r in rows if r["status"] == "completed"]
+        completed_light = [r for r in completed if not r["heavy"]]
+        dispatched = [r for r in rows if r["dispatch_at_ms"] is not None]
 
         def statistics(values):
             values = sorted(values)
@@ -186,6 +232,11 @@ class BaselineRunner:
             return {"mean": sum(values)/len(values), "p95": values[max(0, math.ceil(.95*len(values))-1)], "max": values[-1]}
 
         summary = {"clock": "virtual_ms", "output_length_mode": "oracle_recorded_response",
+                   "arrival_mode": config.arrival_mode,
+                   "batch_scope": config.batch_scope,
+                   "output_classification": config.output_classification,
+                   "priority_assignment": config.priority_assignment,
+                   "heavy_priority_discount": config.heavy_priority_discount,
                    "strategy": config.strategy, "strategy_class": type(self.strategy).__module__ + "." + type(self.strategy).__qualname__,
                    "batch_order": config.batch_order,
                    "batch_order_class": type(self.batch_order).__module__ + "." + type(self.batch_order).__qualname__,
@@ -199,5 +250,28 @@ class BaselineRunner:
                    "last_arrival_ms": rows[-1]["arrival_at_ms"] if rows else None,
                    "simulation_end_ms": now, "heavy_queue_wait_ms": statistics([r["queue_wait_ms"] for r in completed_heavy]),
                    "heavy_latency_ms": statistics([r["latency_ms"] for r in completed_heavy]),
+                   "all_latency_ms": statistics([r["latency_ms"] for r in completed]),
+                   "light_latency_ms": statistics([r["latency_ms"] for r in completed_light]),
+                   "all_queue_wait_ms": statistics([r["queue_wait_ms"] for r in completed]),
+                   "all_batch_wait_ms": statistics([r["batch_wait_ms"] for r in completed]),
+                   "all_capacity_wait_ms": statistics([r["capacity_wait_ms"] for r in completed]),
+                   "capacity_wait_requests": sum(r["capacity_wait_ms"] > 0 for r in completed),
+                   "endpoint_executed_requests": len(dispatched),
+                   "endpoint_executed_light_requests": sum(not r["heavy"] for r in dispatched),
                    "endpoint_dispatch_counts": {e["endpoint_id"]: e["total_requests"] for e in states}}
-        return RunResult(rows, events, batches, states, summary)
+        summary["priority_groups"] = {}
+        if self.classification_policy is not None:
+            summary["output_percentile_reference_samples"] = self.classification_policy.reference.sample_count
+            summary["threshold_update_count"] = sum(s["threshold_changed"] for s in self.classification_policy.trace)
+            summary["threshold_values_used"] = sorted({s["threshold"] for s in self.classification_policy.trace})
+        for label in sorted({r["priority_class"] for r in rows}):
+            members = [r for r in rows if r["priority_class"] == label]
+            finished_members = [r for r in members if r["status"] == "completed"]
+            summary["priority_groups"][label] = {
+                "requests": len(members), "completed": len(finished_members),
+                "rejected": sum(r["status"] == "rejected" for r in members),
+                "latency_ms": statistics([r["latency_ms"] for r in finished_members]),
+                "queue_wait_ms": statistics([r["queue_wait_ms"] for r in finished_members]),
+                "capacity_wait_ms": statistics([r["capacity_wait_ms"] for r in finished_members])}
+        artifacts = self.classification_policy.artifacts() if self.classification_policy is not None else None
+        return RunResult(rows, events, batches, states, summary, artifacts)

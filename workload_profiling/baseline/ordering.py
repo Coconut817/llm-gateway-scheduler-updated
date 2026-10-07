@@ -5,6 +5,7 @@ import inspect
 from typing import Protocol
 
 from .models import EndpointView, WorkloadRequest
+from .priority import effective_priority
 
 
 class BatchOrderStrategy(Protocol):
@@ -34,6 +35,38 @@ class LongestFirstOrderStrategy:
         return [request.request_id for request in sorted(requests, key=lambda r: r.total_tokens, reverse=True)]
 
 
+class EffectivePriorityOrderStrategy:
+    def __init__(self, config, classification_policy=None):
+        self.config = config
+        self.classification_policy = classification_policy
+
+    def score(self, request):
+        if self.classification_policy is None:
+            return effective_priority(request, self.config)
+        heavy = self.classification_policy.decisions[request.request_id]["heavy"]
+        return request.base_priority * (self.config.heavy_priority_discount if heavy else 1)
+
+    def order_batch(self, requests, endpoints, now_ms):
+        # Stable sorting preserves arrival order when both score and output match.
+        return [r.request_id for r in sorted(requests,
+                key=lambda r: (-self.score(r), r.output_tokens))]
+
+
+class LightFirstFifoOrderStrategy:
+    def __init__(self, config, classification_policy=None):
+        self.config = config
+        self.classification_policy = classification_policy
+
+    def order_batch(self, requests, endpoints, now_ms):
+        from .priority import heavy_for
+        def heavy(request):
+            if self.classification_policy is None:
+                return heavy_for(request, self.config)
+            return self.classification_policy.decisions[request.request_id]["heavy"]
+        # Stable partition: each class retains its original arrival order.
+        return [r.request_id for r in sorted(requests, key=heavy)]
+
+
 BUILTIN_BATCH_ORDERS = {
     "fifo": FifoOrderStrategy,
     "shortest_first": ShortestFirstOrderStrategy,
@@ -41,7 +74,12 @@ BUILTIN_BATCH_ORDERS = {
 }
 
 
-def load_batch_order(spec):
+def load_batch_order(spec, *, config=None, classification_policy=None):
+    if spec in ("effective_priority", "light_first_fifo"):
+        if config is None:
+            raise ValueError("Classification ordering requires a BaselineConfig")
+        strategy = EffectivePriorityOrderStrategy if spec == "effective_priority" else LightFirstFifoOrderStrategy
+        return strategy(config, classification_policy)
     if spec in BUILTIN_BATCH_ORDERS:
         return BUILTIN_BATCH_ORDERS[spec]()
     module, separator, attribute = spec.partition(":")

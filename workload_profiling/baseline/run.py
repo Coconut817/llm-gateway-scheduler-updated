@@ -25,7 +25,7 @@ def execute(config, *, source=DEFAULT_SOURCE, source_format="prompt", limit=None
         positive_integer(limit, "limit")
     source, output = Path(source).resolve(), Path(output).resolve()
     # Fixed output names must never overwrite the replay's input file.
-    if source.parent == output and source.name in {"config.json", "summary.json", "endpoints.json", "batches.json", "events.jsonl", "requests.csv", "report.md"}:
+    if source.parent == output and source.name in {"config.json", "summary.json", "endpoints.json", "batches.json", "events.jsonl", "requests.csv", "report.md", "threshold_trace.csv", "classification_policy.json", "classification_metadata.json", "output_percentile_reference.parquet", "output_reference_metadata.json", "replay_config.json"}:
         raise ValueError("Output directory would overwrite the input file")
     source_hash = sha256_file(source)
     start = time.perf_counter()
@@ -59,14 +59,36 @@ def main():
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--limit", type=int, help="Replay the first N original records")
     parser.add_argument("--arrival-interval-ms", type=int)
+    parser.add_argument("--arrival-mode", choices=["fixed", "burst"])
+    parser.add_argument("--burst-size", type=int)
+    parser.add_argument("--burst-span-ms", type=int)
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--batch-wait-ms", type=int)
+    parser.add_argument("--batch-scope", choices=["heavy_only", "all"])
+    parser.add_argument("--priority-assignment", choices=["uniform", "synthetic"])
+    parser.add_argument("--priority-seed", type=int)
+    parser.add_argument("--heavy-priority-discount", type=float)
+    parser.add_argument("--priority-high-weight", type=float)
+    parser.add_argument("--priority-normal-weight", type=float)
+    parser.add_argument("--priority-low-weight", type=float)
+    parser.add_argument("--output-classification", choices=["tokens", "percentile_fixed", "percentile_dynamic"])
+    parser.add_argument("--output-percentile-threshold", type=float)
+    parser.add_argument("--output-policy", type=Path, help="Dynamic percentile mapping and pressure rules JSON")
+    parser.add_argument("--output-reference", type=Path, help="Frozen output percentile reference Parquet")
+    parser.add_argument("--output-reference-metadata", type=Path, help="Reference metadata JSON; required with --output-reference")
     parser.add_argument("--input-threshold", type=float)
     parser.add_argument("--output-threshold", type=float)
     parser.add_argument("--strategy", help="min_rpm or importable.module:class_or_factory")
-    parser.add_argument("--batch-order", help="fifo, shortest_first, longest_first or importable.module:class_or_factory")
+    parser.add_argument("--batch-order", help="fifo, shortest_first, longest_first, effective_priority, light_first_fifo or importable.module:class_or_factory")
     args = parser.parse_args()
-    overrides = {name: getattr(args, name) for name in ("arrival_interval_ms", "batch_size", "batch_wait_ms", "strategy", "batch_order") if getattr(args, name) is not None}
+    overrides = {name: getattr(args, name) for name in ("arrival_interval_ms", "arrival_mode", "burst_size", "burst_span_ms", "batch_size", "batch_wait_ms", "batch_scope", "priority_assignment", "priority_seed", "heavy_priority_discount", "priority_high_weight", "priority_normal_weight", "priority_low_weight", "strategy", "batch_order") if getattr(args, name) is not None}
+    for name in ("output_classification", "output_percentile_threshold"):
+        if getattr(args, name) is not None:
+            overrides[name] = getattr(args, name)
+    for argument, field in (("output_policy", "output_policy_path"), ("output_reference", "output_reference_path"),
+                            ("output_reference_metadata", "output_reference_metadata_path")):
+        if getattr(args, argument) is not None:
+            overrides[field] = str(getattr(args, argument).resolve())
     for argument, field in (("input_threshold", "input_threshold_tokens"), ("output_threshold", "output_threshold_tokens")):
         if getattr(args, argument) is not None:
             overrides[field] = getattr(args, argument)

@@ -33,6 +33,10 @@ CLI 可用 `--output-dir`，Python 可用 execute 的 output 覆盖。每次持�
 | 字段 | 说明 |
 | --- | --- |
 | `request_id` | 本轮唯一请求 ID；prompt 模式按原始行生成 |
+| `base_priority`、`priority_class`、`priority_source` | 基础业务权重、业务分组、标签来源；默认1/normal/default，合成标签规则见交接说明 |
+| `effective_priority`、`priority_discount` | 基础权重乘适用折扣；数值大优先。仅 effective_priority 排序使用，其他排序只记录 |
+| `output_percentile`、`output_percentile_threshold`、`output_token_cutoff` | 百分位模式新增：冻结参考中的排名、本批门槛及对应最小token长度。tokens模式不新增这些列 |
+| `threshold_source`、`pressure_level`、`classified_at_ms` | 百分位模式新增：固定门槛为MANUAL、压力门槛为CONGESTION；内部压力档位及分类时间。分类发生在批释放时，最终CSV所有请求均已分类 |
 | `source_line` | 原始行号，0-based；自定义 generator 可为空 |
 | `input_tokens`、`output_tokens`、`total_tokens` | 已知离线长度，total=input+output |
 | `input_heavy`、`output_heavy`、`heavy` | 两轴命中与 OR 结果；边界采用 >= |
@@ -56,7 +60,7 @@ CLI 可用 `--output-dir`，Python 可用 execute 的 output 覆盖。每次持�
 | `endpoint_concurrency_before` | 所选端点调度前在途数 |
 | `rpm_utilization_before`、`tpm_utilization_before`、`concurrency_utilization_before` | 对应调度前利用率 |
 
-重型完成请求满足 `queue_wait_ms = batch_wait_ms + capacity_wait_ms`，`latency_ms = queue_wait_ms + service_ms`。轻型没有占用端点，不应被误当作一次 endpoint 调用。
+成功派发并完成的请求满足 `queue_wait_ms = batch_wait_ms + capacity_wait_ms`，`latency_ms = queue_wait_ms + service_ms`。默认 heavy_only 模式下轻型没有占用端点；all 模式下轻重都入窗并执行。具体配置和新增全部/轻型指标见 [交接说明](handoff-guide.md)。
 
 CSV 空单元格是缺失，不是 0、false 或第一个端点。JSON 中同样的缺失用 null。空输入的 CSV 只提供最小列集；非空输入为完整轨迹列集。
 
@@ -76,6 +80,7 @@ dispatch_order 包含最终被拒绝的请求，因此它不等于成功派发/�
 | `light_completed` | request_id |
 | `batch_released` | 完整批次字段 |
 | `capacity_wait` | 当前无法分配的队首 request_id；可能多次记录 |
+| `classification_updated` | 百分位模式每批释放前的压力、前后门槛、token界限与分类数量；arrived时heavy=null表示尚未分类 |
 | `dispatched` | request_id、endpoint_id、batch_id、batch_position、finished_at_ms、endpoint_state_after |
 | `completed` | request_id、endpoint_id、concurrency_after |
 | `rejected` | request_id、reason |
